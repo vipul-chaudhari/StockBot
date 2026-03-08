@@ -46,9 +46,13 @@ def analyze_stocks():
         results[key] = sorted(results[key], key=lambda x: x[2], reverse=(key!="Short-term"))[:10]
     return results
 
+import pytz
+
 def send_telegram_msg(results, chat_id):
-    now = datetime.datetime.now().strftime('%d %b, %Y %H:%M')
-    text = f"📊 *NSE RECOMMENDATIONS - {now}*\n\n"
+    # Set the timezone to IST
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
+    text = f"📊 *NSE RECOMMENDATIONS - {now} IST*\n\n"
     for category, stocks in results.items():
         text += f"📍 *{category.upper()}*\n"
         if not stocks: text += "No clear signals.\n"
