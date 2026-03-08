@@ -28,7 +28,7 @@ STOCK_TICKERS = [
 
 CRYPTO_TICKERS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", 
-    "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "MATIC-USD", "SHIB-USD"
+    "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "POL-USD", "SHIB-USD"
 ]
 
 def analyze_assets(tickers, is_crypto=False):
@@ -54,16 +54,13 @@ def analyze_assets(tickers, is_crypto=False):
 
             # CRITERIA
             if is_crypto:
-                # Crypto: RSI < 40 (Oversold) or High Momentum (RSI > 60)
-                if (rsi < 40 or rsi > 60) and cp > ema5:
+                # Relaxed Crypto Criteria: RSI < 45 or RSI > 55
+                if (rsi < 45 or rsi > 55) and cp > ema5:
                     results.append((ticker, cp, rsi, potential_profit))
             else:
-                # Stocks: Mean Reversion / Swing
                 if rsi < 45 and cp > ema5:
                     results.append((ticker, cp, rsi, potential_profit))
         except: continue
-        
-    # Sort by Potential Profit
     return sorted(results, key=lambda x: x[3], reverse=True)[:10]
 
 def send_telegram_msg(stock_recs, crypto_recs, chat_id):
@@ -71,23 +68,24 @@ def send_telegram_msg(stock_recs, crypto_recs, chat_id):
     now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
     text = f"🚀 *DAILY ADVISOR - {now} IST*\n\n"
     
-    if stock_recs:
-        text += "📈 *TOP STOCK SWINGS (NSE)*\n"
-        for s in stock_recs:
-            text += f"• `{s[0]}`: ₹{s[1]:.0f} | Target: +{s[3]:.1f}%\n"
-        text += "\n"
+    if not stock_recs and not crypto_recs:
+        text += "📉 No clear signals identified at this time."
+    else:
+        if stock_recs:
+            text += "📈 *TOP STOCK SWINGS (NSE)*\n"
+            for s in stock_recs:
+                text += f"• `{s[0]}`: ₹{s[1]:.0f} | Target: +{s[3]:.1f}%\n"
+            text += "\n"
         
-    if crypto_recs:
-        text += "🪙 *TOP CRYPTO SIGNALS*\n"
-        for c in crypto_recs:
-            text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
-        text += "\n"
+        if crypto_recs:
+            text += "🪙 *TOP CRYPTO SIGNALS*\n"
+            for c in crypto_recs:
+                text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
+            text += "\n"
 
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
-    import sys
-    # Detect if we should analyze stocks (only on weekdays 9-9) or just crypto
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.datetime.now(ist)
     is_weekday = now_ist.weekday() < 5
@@ -99,6 +97,6 @@ if __name__ == "__main__":
     
     crypto_results = analyze_assets(CRYPTO_TICKERS, is_crypto=True)
     
-    if stock_results or crypto_results:
-        send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
+    # Send message even if results are empty to show the bot is active
+    send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
     print("Done.")
