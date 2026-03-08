@@ -5,12 +5,13 @@ import requests
 import datetime
 import os
 import time
+import pytz
 
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or '8757431245:AAHjis0btm24n0Q_WIh4GZYY-b-ToYyZKyU'
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') or '8552505296'
 
-TICKERS = [
+STOCK_TICKERS = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
     "INFY.NS", "SBIN.NS", "LICI.NS", "HINDUNILVR.NS", "ITC.NS",
     "LT.NS", "HCLTECH.NS", "BAJFINANCE.NS", "SUNPHARMA.NS", "M&M.NS",
@@ -25,68 +26,79 @@ TICKERS = [
     "PNB.NS", "BANKBARODA.NS", "CANBK.NS", "GAIL.NS", "IRFC.NS", "RECLTD.NS", "PFC.NS"
 ]
 
-def analyze_stocks():
-    results = {"Intraday": [], "Short-term": [], "Long-term": []}
-    print(f"Analyzing {len(TICKERS)} stocks...")
-    for ticker in TICKERS:
+CRYPTO_TICKERS = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", 
+    "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "MATIC-USD", "SHIB-USD"
+]
+
+def analyze_assets(tickers, is_crypto=False):
+    results = []
+    print(f"Analyzing {len(tickers)} {'cryptos' if is_crypto else 'stocks'}...")
+    for ticker in tickers:
         try:
-            data = yf.download(ticker, period="1y", interval="1d", progress=False)
-            if data.empty or len(data) < 200: continue
+            period = "1mo" if is_crypto else "1y"
+            data = yf.download(ticker, period=period, interval="1d", progress=False)
+            if data.empty or len(data) < 14: continue
             if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+            
             data['RSI'] = ta.rsi(data['Close'], length=14)
             data['EMA_5'] = ta.ema(data['Close'], length=5)
-            data['SMA_200'] = ta.sma(data['Close'], length=200)
-            cp, rsi, ema5, sma200 = float(data['Close'].iloc[-1]), float(data['RSI'].iloc[-1]), float(data['EMA_5'].iloc[-1]), float(data['SMA_200'].iloc[-1])
-            vol_ratio = float(data['Volume'].iloc[-1] / data['Volume'].tail(10).mean())
-            if rsi > 65 and vol_ratio > 1.2: results["Intraday"].append((ticker, cp, rsi))
-            if rsi < 45 and cp > ema5: results["Short-term"].append((ticker, cp, rsi))
-            if cp > sma200 and rsi > 50: results["Long-term"].append((ticker, cp, rsi))
+            
+            cp = float(data['Close'].iloc[-1])
+            rsi = float(data['RSI'].iloc[-1])
+            ema5 = float(data['EMA_5'].iloc[-1])
+            
+            # Potential Profit calculation (Upside to 14-day high)
+            recent_high = float(data['High'].tail(14).max())
+            potential_profit = ((recent_high - cp) / cp) * 100
+
+            # CRITERIA
+            if is_crypto:
+                # Crypto: RSI < 40 (Oversold) or High Momentum (RSI > 60)
+                if (rsi < 40 or rsi > 60) and cp > ema5:
+                    results.append((ticker, cp, rsi, potential_profit))
+            else:
+                # Stocks: Mean Reversion / Swing
+                if rsi < 45 and cp > ema5:
+                    results.append((ticker, cp, rsi, potential_profit))
         except: continue
-    for key in results:
-        results[key] = sorted(results[key], key=lambda x: x[2], reverse=(key!="Short-term"))[:10]
-    return results
+        
+    # Sort by Potential Profit
+    return sorted(results, key=lambda x: x[3], reverse=True)[:10]
 
-import pytz
-
-def send_telegram_msg(results, chat_id):
-    # Set the timezone to IST
+def send_telegram_msg(stock_recs, crypto_recs, chat_id):
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
-    text = f"📊 *NSE RECOMMENDATIONS - {now} IST*\n\n"
-    for category, stocks in results.items():
-        text += f"📍 *{category.upper()}*\n"
-        if not stocks: text += "No clear signals.\n"
-        else:
-            for s in stocks: text += f"• `{s[0]}`: ₹{s[1]:.0f} (RSI: {s[2]:.1f})\n"
+    text = f"🚀 *DAILY ADVISOR - {now} IST*\n\n"
+    
+    if stock_recs:
+        text += "📈 *TOP STOCK SWINGS (NSE)*\n"
+        for s in stock_recs:
+            text += f"• `{s[0]}`: ₹{s[1]:.0f} | Target: +{s[3]:.1f}%\n"
         text += "\n"
+        
+    if crypto_recs:
+        text += "🪙 *TOP CRYPTO SIGNALS*\n"
+        for c in crypto_recs:
+            text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
+        text += "\n"
+
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
-def handle_listener():
-    last_update_id = 0
-    print("Bot is listening for messages...")
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={last_update_id + 1}"
-            response = requests.get(url).json()
-            if response['ok'] and response['result']:
-                for update in response['result']:
-                    last_update_id = update['update_id']
-                    if 'message' in update:
-                        chat_id = update['message']['chat']['id']
-                        print(f"Received ping from {chat_id}. Processing recommendations...")
-                        recs = analyze_stocks()
-                        send_telegram_msg(recs, chat_id)
-            time.sleep(10) # Check every 10 seconds
-        except Exception as e:
-            print(f"Error in listener: {e}")
-            time.sleep(10)
-
 if __name__ == "__main__":
-    # If run normally (from GitHub Cron), it sends once.
-    # To use as a bot, run 'python stock_recommender.py listen'
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'listen':
-        handle_listener()
-    else:
-        recs = analyze_stocks()
-        send_telegram_msg(recs, TELEGRAM_CHAT_ID)
+    # Detect if we should analyze stocks (only on weekdays 9-9) or just crypto
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.datetime.now(ist)
+    is_weekday = now_ist.weekday() < 5
+    is_market_hours = 9 <= now_ist.hour < 21
+
+    stock_results = []
+    if is_weekday and is_market_hours:
+        stock_results = analyze_assets(STOCK_TICKERS, is_crypto=False)
+    
+    crypto_results = analyze_assets(CRYPTO_TICKERS, is_crypto=True)
+    
+    if stock_results or crypto_results:
+        send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
+    print("Done.")
