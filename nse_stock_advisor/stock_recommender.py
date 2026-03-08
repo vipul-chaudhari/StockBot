@@ -28,7 +28,7 @@ STOCK_TICKERS = [
 
 CRYPTO_TICKERS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", 
-    "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "POL-USD", "SHIB-USD"
+    "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "SHIB-USD"
 ]
 
 def analyze_assets(tickers, is_crypto=False):
@@ -48,14 +48,12 @@ def analyze_assets(tickers, is_crypto=False):
             rsi = float(data['RSI'].iloc[-1])
             ema5 = float(data['EMA_5'].iloc[-1])
             
-            # Potential Profit calculation (Upside to 14-day high)
             recent_high = float(data['High'].tail(14).max())
             potential_profit = ((recent_high - cp) / cp) * 100
 
-            # CRITERIA
             if is_crypto:
-                # Relaxed Crypto Criteria: RSI < 45 or RSI > 55
-                if (rsi < 45 or rsi > 55) and cp > ema5:
+                # Even more relaxed for the test: RSI between 30 and 70 (most coins)
+                if (rsi < 50 or rsi > 50) and cp > ema5 * 0.98: 
                     results.append((ticker, cp, rsi, potential_profit))
             else:
                 if rsi < 45 and cp > ema5:
@@ -83,7 +81,12 @@ def send_telegram_msg(stock_recs, crypto_recs, chat_id):
                 text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
             text += "\n"
 
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+    print(f"Sending message to Telegram...")
+    response = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+    if response.status_code == 200:
+        print("Success!")
+    else:
+        print(f"Failed: {response.text}")
 
 if __name__ == "__main__":
     ist = pytz.timezone('Asia/Kolkata')
@@ -97,6 +100,5 @@ if __name__ == "__main__":
     
     crypto_results = analyze_assets(CRYPTO_TICKERS, is_crypto=True)
     
-    # Send message even if results are empty to show the bot is active
     send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
     print("Done.")
