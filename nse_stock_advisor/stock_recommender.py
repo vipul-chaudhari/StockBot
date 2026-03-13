@@ -31,87 +31,94 @@ CRYPTO_TICKERS = [
     "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "SHIB-USD"
 ]
 
-def analyze_crypto(tickers):
-    st_results = []
-    lt_results = []
-    print(f"Analyzing {len(tickers)} cryptos...")
-    
-    for ticker in tickers:
-        try:
-            data = yf.download(ticker, period="1y", interval="1d", progress=False)
-            if data.empty or len(data) < 200: continue
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-            
-            data['RSI'] = ta.rsi(data['Close'], length=14)
-            data['EMA_5'] = ta.ema(data['Close'], length=5)
-            data['SMA_200'] = ta.sma(data['Close'], length=200)
-            
-            cp = float(data['Close'].iloc[-1])
-            rsi = float(data['RSI'].iloc[-1])
-            ema5 = float(data['EMA_5'].iloc[-1])
-            sma200 = float(data['SMA_200'].iloc[-1])
-
-            # 1. SHORT-TERM GOAL (7-day upside)
-            if (rsi < 45 or rsi > 55) and cp > ema5:
-                high_7d = float(data['High'].tail(7).max())
-                profit_st = ((high_7d - cp) / cp) * 100
-                st_results.append((ticker, cp, rsi, profit_st))
-
-            # 2. LONG-TERM GOAL (90-day upside)
-            if cp > sma200 and rsi > 50:
-                high_90d = float(data['High'].tail(90).max())
-                profit_lt = ((high_90d - cp) / cp) * 100
-                lt_results.append((ticker, cp, rsi, profit_lt))
-        except: continue
+def refined_analysis(ticker, is_crypto=False):
+    try:
+        # Fetch 1 year of data for reliable indicators
+        data = yf.download(ticker, period="1y", interval="1d", progress=False)
+        if data.empty or len(data) < 50: return None
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
-    return {
-        "Short-term": sorted(st_results, key=lambda x: x[3], reverse=True)[:5],
-        "Long-term": sorted(lt_results, key=lambda x: x[3], reverse=True)[:5]
-    }
+        # 1. Trend Indicators
+        data['EMA20'] = ta.ema(data['Close'], length=20)
+        data['EMA50'] = ta.ema(data['Close'], length=50)
+        data['SMA200'] = ta.sma(data['Close'], length=200)
+        
+        # 2. Momentum Indicators
+        data['RSI'] = ta.rsi(data['Close'], length=14)
+        macd = ta.macd(data['Close'], fast=12, slow=26, signal=9)
+        data['MACD'] = macd['MACD_12_26_9']
+        data['MACDs'] = macd['MACDs_12_26_9']
+        
+        # 3. Volume & Trend Strength
+        data['ADX'] = ta.adx(data['High'], data['Low'], data['Close'], length=14)['ADX_14']
+        avg_vol = data['Volume'].tail(20).mean()
+        curr_vol = data['Volume'].iloc[-1]
+        
+        # Current Values
+        cp = float(data['Close'].iloc[-1])
+        rsi = float(data['RSI'].iloc[-1])
+        ema20 = float(data['EMA20'].iloc[-1])
+        ema50 = float(data['EMA50'].iloc[-1])
+        sma200 = float(data['SMA200'].iloc[-1])
+        macd_val = float(data['MACD'].iloc[-1])
+        macds_val = float(data['MACDs'].iloc[-1])
+        adx = float(data['ADX'].iloc[-1])
+        vol_ratio = curr_vol / avg_vol
+        
+        # Upside Potential (Target)
+        high_90d = float(data['High'].tail(90).max())
+        potential = ((high_90d - cp) / cp) * 100
 
-def analyze_stocks(tickers):
-    results = []
-    print(f"Analyzing {len(tickers)} stocks...")
-    for ticker in tickers:
-        try:
-            data = yf.download(ticker, period="1y", interval="1d", progress=False)
-            if data.empty or len(data) < 14: continue
-            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-            data['RSI'] = ta.rsi(data['Close'], length=14)
-            data['EMA_5'] = ta.ema(data['Close'], length=5)
-            cp, rsi, ema5 = float(data['Close'].iloc[-1]), float(data['RSI'].iloc[-1]), float(data['EMA_5'].iloc[-1])
-            if rsi < 45 and cp > ema5:
-                recent_high = float(data['High'].tail(14).max())
-                profit = ((recent_high - cp) / cp) * 100
-                results.append((ticker, cp, rsi, profit))
-        except: continue
-    return sorted(results, key=lambda x: x[3], reverse=True)[:10]
+        # --- REFINED STRATEGY ---
+        # 1. Trend must be bullish: EMA20 > EMA50
+        # 2. ADX > 20: Trend is strong enough
+        # 3. Volume confirmation: Volume > 1.2x of Average
+        # 4. Momentum: MACD > Signal Line OR RSI rebounding from 40
+        
+        score = 0
+        if ema20 > ema50: score += 1
+        if cp > sma200: score += 1
+        if vol_ratio > 1.2: score += 1
+        if macd_val > macds_val: score += 1
+        if 40 < rsi < 70: score += 1
+        if adx > 20: score += 1
+
+        # Only recommend if confidence score is high (4 or more points out of 6)
+        if score >= 4:
+            return {
+                "ticker": ticker,
+                "price": cp,
+                "potential": potential,
+                "score": score,
+                "rsi": rsi,
+                "is_crypto": is_crypto
+            }
+        return None
+    except:
+        return None
 
 def send_telegram_msg(stock_recs, crypto_recs, chat_id):
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
-    text = f"🚀 *DAILY ADVISOR - {now} IST*\n\n"
+    text = f"🛡️ *REFINED MARKET ADVISOR - {now} IST*\n"
+    text += "_Strategy: Trend + Volume + MACD Confirmation_\n\n"
     
     if stock_recs:
-        text += "📈 *NSE STOCKS (SWING)*\n"
+        text += "📈 *STOCKS (HIGH CONFIDENCE)*\n"
         for s in stock_recs:
-            text += f"• `{s[0]}`: ₹{s[1]:.0f} | Target: +{s[3]:.1f}%\n"
+            stars = "⭐" * (s['score'] - 3)
+            text += f"• `{s['ticker']}`: ₹{s['price']:.0f} | Target: +{s['potential']:.1f}% {stars}\n"
         text += "\n"
         
-    if crypto_recs["Short-term"]:
-        text += "🪙 *CRYPTO (SHORT-TERM)*\n"
-        for c in crypto_recs["Short-term"]:
-            text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
+    if crypto_recs:
+        text += "🪙 *CRYPTO (STRONG SIGNALS)*\n"
+        for c in crypto_recs:
+            stars = "⭐" * (c['score'] - 3)
+            text += f"• `{c['ticker'].replace('-USD','')}`: ${c['price']:.2f} | Target: +{c['potential']:.1f}% {stars}\n"
         text += "\n"
 
-    if crypto_recs["Long-term"]:
-        text += "💎 *CRYPTO (LONG-TERM)*\n"
-        for c in crypto_recs["Long-term"]:
-            text += f"• `{c[0].replace('-USD','')}`: ${c[1]:,.2f} | Target: +{c[3]:.1f}%\n"
-        text += "\n"
-
-    if not stock_recs and not crypto_recs["Short-term"] and not crypto_recs["Long-term"]:
-        text += "📉 No clear signals identified at this time."
+    if not stock_recs and not crypto_recs:
+        text += "📉 No high-confidence signals found right now. Markets are sideways."
 
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
@@ -123,9 +130,20 @@ if __name__ == "__main__":
 
     stock_results = []
     if is_weekday and is_market_hours:
-        stock_results = analyze_stocks(STOCK_TICKERS)
+        print("Analyzing Stocks...")
+        for t in STOCK_TICKERS:
+            res = refined_analysis(t, is_crypto=False)
+            if res: stock_results.append(res)
     
-    crypto_results = analyze_crypto(CRYPTO_TICKERS)
+    crypto_results = []
+    print("Analyzing Crypto...")
+    for t in CRYPTO_TICKERS:
+        res = refined_analysis(t, is_crypto=True)
+        if res: crypto_results.append(res)
+    
+    # Sort by confidence score and then potential
+    stock_results = sorted(stock_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:8]
+    crypto_results = sorted(crypto_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:8]
     
     send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
     print("Done.")
