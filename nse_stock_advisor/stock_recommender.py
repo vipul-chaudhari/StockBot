@@ -31,59 +31,53 @@ CRYPTO_TICKERS = [
     "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "SHIB-USD"
 ]
 
-def refined_analysis(ticker, is_crypto=False):
+def ultra_refined_analysis(ticker, is_crypto=False):
     try:
-        # Fetch 1 year of data for reliable indicators
-        data = yf.download(ticker, period="1y", interval="1d", progress=False)
-        if data.empty or len(data) < 50: return None
+        # Fetch Intraday 1-Hour data (last 7 days)
+        interval = "1h"
+        period = "1mo" if is_crypto else "7d"
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
+        
+        if data.empty or len(data) < 30: return None
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+
+        # 1. VWAP (The Institutional Support)
+        # Note: ta.vwap requires 'anchor' - we use daily reset for VWAP
+        data['VWAP'] = ta.vwap(data['High'], data['Low'], data['Close'], data['Volume'])
         
-        # 1. Trend Indicators
-        data['EMA20'] = ta.ema(data['Close'], length=20)
-        data['EMA50'] = ta.ema(data['Close'], length=50)
-        data['SMA200'] = ta.sma(data['Close'], length=200)
-        
-        # 2. Momentum Indicators
+        # 2. SuperTrend (Volatility + Trend)
+        # Returns: Trend (1 or -1), Direction, Long/Short values
+        st = ta.supertrend(data['High'], data['Low'], data['Close'], length=10, multiplier=3.0)
+        data['ST_Trend'] = st['SUPERT_10_3.0']
+        data['ST_Dir'] = st['SUPERTd_10_3.0'] # 1 is Long, -1 is Short
+
+        # 3. RSI for Overbought/Oversold check
         data['RSI'] = ta.rsi(data['Close'], length=14)
-        macd = ta.macd(data['Close'], fast=12, slow=26, signal=9)
-        data['MACD'] = macd['MACD_12_26_9']
-        data['MACDs'] = macd['MACDs_12_26_9']
-        
-        # 3. Volume & Trend Strength
-        data['ADX'] = ta.adx(data['High'], data['Low'], data['Close'], length=14)['ADX_14']
-        avg_vol = data['Volume'].tail(20).mean()
-        curr_vol = data['Volume'].iloc[-1]
         
         # Current Values
         cp = float(data['Close'].iloc[-1])
+        vwap = float(data['VWAP'].iloc[-1])
+        st_dir = int(data['ST_Dir'].iloc[-1])
         rsi = float(data['RSI'].iloc[-1])
-        ema20 = float(data['EMA20'].iloc[-1])
-        ema50 = float(data['EMA50'].iloc[-1])
-        sma200 = float(data['SMA200'].iloc[-1])
-        macd_val = float(data['MACD'].iloc[-1])
-        macds_val = float(data['MACDs'].iloc[-1])
-        adx = float(data['ADX'].iloc[-1])
-        vol_ratio = curr_vol / avg_vol
         
-        # Upside Potential (Target)
-        high_90d = float(data['High'].tail(90).max())
-        potential = ((high_90d - cp) / cp) * 100
+        # Potential upside to recent 3-day high
+        recent_high = float(data['High'].tail(24).max()) 
+        potential = ((recent_high - cp) / cp) * 100
 
-        # --- REFINED STRATEGY ---
-        # 1. Trend must be bullish: EMA20 > EMA50
-        # 2. ADX > 20: Trend is strong enough
-        # 3. Volume confirmation: Volume > 1.2x of Average
-        # 4. Momentum: MACD > Signal Line OR RSI rebounding from 40
+        # --- THE GOLDEN ENTRY RULES ---
+        # A. Price MUST be above VWAP (Institutional Buying)
+        # B. SuperTrend MUST be in a 'Long' direction (1)
+        # C. RSI should be between 45 and 65 (Strength, not yet overbought)
         
         score = 0
-        if ema20 > ema50: score += 1
-        if cp > sma200: score += 1
-        if vol_ratio > 1.2: score += 1
-        if macd_val > macds_val: score += 1
-        if 40 < rsi < 70: score += 1
-        if adx > 20: score += 1
+        if cp > vwap: score += 2  # VWAP is high weight
+        if st_dir == 1: score += 2 # SuperTrend is high weight
+        if 45 < rsi < 65: score += 1
+        
+        # Volume Spike Check
+        avg_vol = data['Volume'].tail(20).mean()
+        if data['Volume'].iloc[-1] > (avg_vol * 1.2): score += 1
 
-        # Only recommend if confidence score is high (4 or more points out of 6)
         if score >= 4:
             return {
                 "ticker": ticker,
@@ -94,31 +88,32 @@ def refined_analysis(ticker, is_crypto=False):
                 "is_crypto": is_crypto
             }
         return None
-    except:
+    except Exception as e:
+        print(f"Error {ticker}: {e}")
         return None
 
 def send_telegram_msg(stock_recs, crypto_recs, chat_id):
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
-    text = f"🛡️ *REFINED MARKET ADVISOR - {now} IST*\n"
-    text += "_Strategy: Trend + Volume + MACD Confirmation_\n\n"
+    text = f"🎯 *ULTRA-VALID ADVISOR - {now} IST*\n"
+    text += "_System: 1h VWAP + SuperTrend Strategy_\n\n"
     
     if stock_recs:
-        text += "📈 *STOCKS (HIGH CONFIDENCE)*\n"
+        text += "📈 *NSE STOCKS (PRO-SIGNALS)*\n"
         for s in stock_recs:
-            stars = "⭐" * (s['score'] - 3)
-            text += f"• `{s['ticker']}`: ₹{s['price']:.0f} | Target: +{s['potential']:.1f}% {stars}\n"
+            score_label = "🔥🔥" if s['score'] >= 5 else "🔥"
+            text += f"• `{s['ticker']}`: ₹{s['price']:.0f} | Target: +{s['potential']:.1f}% {score_label}\n"
         text += "\n"
         
     if crypto_recs:
-        text += "🪙 *CRYPTO (STRONG SIGNALS)*\n"
+        text += "🪙 *CRYPTO (PRO-SIGNALS)*\n"
         for c in crypto_recs:
-            stars = "⭐" * (c['score'] - 3)
-            text += f"• `{c['ticker'].replace('-USD','')}`: ${c['price']:.2f} | Target: +{c['potential']:.1f}% {stars}\n"
+            score_label = "🔥🔥" if c['score'] >= 5 else "🔥"
+            text += f"• `{c['ticker'].replace('-USD','')}`: ${c['price']:.2f} | Target: +{c['potential']:.1f}% {score_label}\n"
         text += "\n"
 
     if not stock_recs and not crypto_recs:
-        text += "📉 No high-confidence signals found right now. Markets are sideways."
+        text += "📉 Waiting for high-probability setups..."
 
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
@@ -130,20 +125,20 @@ if __name__ == "__main__":
 
     stock_results = []
     if is_weekday and is_market_hours:
-        print("Analyzing Stocks...")
+        print("Analyzing NSE Stocks (Intraday)...")
         for t in STOCK_TICKERS:
-            res = refined_analysis(t, is_crypto=False)
+            res = ultra_refined_analysis(t, is_crypto=False)
             if res: stock_results.append(res)
     
     crypto_results = []
-    print("Analyzing Crypto...")
+    print("Analyzing Crypto (Intraday)...")
     for t in CRYPTO_TICKERS:
-        res = refined_analysis(t, is_crypto=True)
+        res = ultra_refined_analysis(t, is_crypto=True)
         if res: crypto_results.append(res)
     
-    # Sort by confidence score and then potential
-    stock_results = sorted(stock_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:8]
-    crypto_results = sorted(crypto_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:8]
+    # Sort by score (confidence) and potential
+    stock_results = sorted(stock_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:6]
+    crypto_results = sorted(crypto_results, key=lambda x: (x['score'], x['potential']), reverse=True)[:6]
     
     send_telegram_msg(stock_results, crypto_results, TELEGRAM_CHAT_ID)
     print("Done.")
