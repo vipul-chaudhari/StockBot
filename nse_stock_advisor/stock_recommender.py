@@ -6,10 +6,12 @@ import datetime
 import os
 import time
 import pytz
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+import io
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (GITHUB SECRETS RECOMMENDED) ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or '8757431245:AAHjis0btm24n0Q_WIh4GZYY-b-ToYyZKyU'
-
 # List of Chat IDs (Your Private ID + Group ID)
 TELEGRAM_CHAT_IDS = ['8552505296', '-1003818653543']
 
@@ -33,6 +35,32 @@ CRYPTO_TICKERS = [
     "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "SHIB-USD"
 ]
 
+def generate_professional_chart(ticker, df, res):
+    """Generates a professional financial chart for the signal."""
+    try:
+        plot_df = df.tail(40).copy()
+        mc = mpf.make_marketcolors(up='#26a69a', down='#ef5350', inherit=True)
+        s = mpf.make_mpf_style(base_mpf_style='charles', marketcolors=mc, gridstyle='--')
+        
+        # Overlay lines
+        entry_l = [res['entry']] * len(plot_df)
+        tp_l = [res['tp']] * len(plot_df)
+        sl_l = [res['sl']] * len(plot_df)
+        
+        apds = [
+            mpf.make_addplot(entry_l, color='gold', width=1, linestyle='-'),
+            mpf.make_addplot(tp_l, color='lime', width=1.2, linestyle='--'),
+            mpf.make_addplot(sl_l, color='red', width=1.2, linestyle='--')
+        ]
+        
+        buf = io.BytesIO()
+        mpf.plot(plot_df, type='candle', style=s, addplot=apds,
+                 title=f"\n{ticker} Analysis",
+                 savefig=dict(fname=buf, format='png', bbox_inches='tight'))
+        buf.seek(0)
+        return buf
+    except: return None
+
 def analyze_professional(ticker, mode="Intraday"):
     try:
         interval = "1h" if mode == "Intraday" else "1d"
@@ -46,79 +74,90 @@ def analyze_professional(ticker, mode="Intraday"):
         cp, rsi, atr = float(data['Close'].iloc[-1]), float(data['RSI'].iloc[-1]), float(data['ATR'].iloc[-1])
         vol_ratio = data['Volume'].iloc[-1] / data['Volume'].tail(20).mean()
 
+        res = None
         if mode == "Intraday":
             data['VWAP'] = ta.vwap(data['High'], data['Low'], data['Close'], data['Volume'])
             st = ta.supertrend(data['High'], data['Low'], data['Close'], length=10, multiplier=3.0)
             vwap = float(data['VWAP'].iloc[-1])
             st_dir = int(st['SUPERTd_10_3.0'].iloc[-1])
-            if cp > vwap and st_dir == 1 and vol_ratio > 1.3 and 50 < rsi < 75:
+            if cp > vwap and st_dir == 1 and vol_ratio > 1.2 and 45 < rsi < 75:
                 sl = cp - (atr * 1.5)
                 tp = cp + ((cp - sl) * 2)
-                return {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp}
+                res = {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp, "mode": mode, "rsi": rsi}
 
         elif mode == "Swing":
             data['EMA20'] = ta.ema(data['Close'], length=20)
             data['EMA50'] = ta.ema(data['Close'], length=50)
             e20, e50 = float(data['EMA20'].iloc[-1]), float(data['EMA50'].iloc[-1])
-            if e20 > e50 and cp > e20 and rsi > 55 and vol_ratio > 1.1:
+            if e20 > e50 and cp > e20 and rsi > 50 and vol_ratio > 1.0:
                 sl = cp - (atr * 2.0)
                 tp = cp + ((cp - sl) * 3)
-                return {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp}
+                res = {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp, "mode": mode, "rsi": rsi}
 
-        elif mode == "LongTerm":
-            data['SMA200'] = ta.sma(data['Close'], length=200)
-            s200 = float(data['SMA200'].iloc[-1])
-            if cp > s200 and rsi > 50 and cp > (s200 * 1.05):
-                sl = cp - (atr * 3.0)
-                tp = cp + ((cp - sl) * 5)
-                return {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp}
+        if res:
+            res['chart'] = generate_professional_chart(ticker, data, res)
+            return res
         return None
     except: return None
 
-def send_professional_msg(results, chat_ids):
+def send_vip_signal(res):
+    ticker_clean = res['ticker'].replace('.NS', '').replace('-USD', '')
+    curr = "₹" if ".NS" in res['ticker'] else "$"
     ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.datetime.now(ist).strftime('%d %b, %Y %H:%M')
-    text = f"🏛️ *THE PROFESSIONAL TRADING DESK*\nTime: {now} IST\n────────────────────\n\n"
+    now = datetime.datetime.now(ist).strftime('%H:%M')
     
-    has_content = False
-    for mode in ["Intraday", "Swing", "LongTerm"]:
-        mode_results = results.get(mode, [])
-        if mode_results:
-            has_content = True
-            icon = "⚡" if mode == "Intraday" else "🌊" if mode == "Swing" else "💎"
-            text += f"{icon} *{mode.upper()} CALLS*\n"
-            for r in mode_results:
-                ticker = r['ticker'].replace('.NS', '').replace('-USD', '')
-                curr = "₹" if ".NS" in r['ticker'] else "$"
-                text += f"• `{ticker}` | Entry: {curr}{r['entry']:.2f}\n  Target: {curr}{r['tp']:.2f} | SL: {curr}{r['sl']:.2f}\n"
-            text += "\n"
+    risk = abs(res['entry'] - res['sl'])
+    reward = abs(res['tp'] - res['entry'])
+    rr = round(reward / risk, 1) if risk != 0 else 0
 
-    if not has_content:
-        text += "🛡️ *CAPITAL PRESERVATION MODE*\nMarket conditions are sideways. Protect your capital."
+    caption = (
+        f"🌟 *VIP SIGNAL: {ticker_clean}* 🌟\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 **STRATEGY:** `{res['mode'].upper()}`\n"
+        f"📊 **RSI:** `{round(res['rsi'], 1)}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔹 **ENTRY:** `{curr}{res['entry']:.2f}`\n"
+        f"🎯 **TARGET:** `{curr}{res['tp']:.2f}`\n"
+        f"🛑 **STOP LOSS:** `{curr}{res['sl']:.2f}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚖️ **R/R RATIO:** `{rr}`\n"
+        f"⏰ _Time: {now} IST_"
+    )
 
-    for chat_id in chat_ids:
+    for chat_id in TELEGRAM_CHAT_IDS:
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+            if res.get('chart'):
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto", 
+                              data={'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'},
+                              files={'photo': ('chart.png', res['chart'], 'image/png')})
+            else:
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
+                              json={"chat_id": chat_id, "text": caption, "parse_mode": "Markdown"})
         except Exception as e:
-            print(f"Failed to send to {chat_id}: {e}")
+            print(f"Error sending signal: {e}")
 
 if __name__ == "__main__":
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.datetime.now(ist)
-    is_market_open = (now_ist.weekday() < 5 and 9 <= now_ist.hour < 21)
-    final_results = {"Intraday": [], "Swing": [], "LongTerm": []}
+    is_market_open = (now_ist.weekday() < 5 and 9 <= now_ist.hour < 16) # NSE hours
     
+    print(f"Starting Professional Scan at {now_ist.strftime('%H:%M')} IST...")
+
+    # Scan Stocks (only during NSE hours)
     if is_market_open:
         for t in STOCK_TICKERS:
-            for m in ["Intraday", "Swing", "LongTerm"]:
+            for m in ["Intraday", "Swing"]:
                 res = analyze_professional(t, m)
-                if res: final_results[m].append(res)
-    
-    for t in CRYPTO_TICKERS:
-        for m in ["Intraday", "Swing", "LongTerm"]:
-            res = analyze_professional(t, m)
-            if res: final_results[m].append(res)
+                if res:
+                    send_vip_signal(res)
+                    time.sleep(1)
 
-    for m in final_results: final_results[m] = final_results[m][:3]
-    send_professional_msg(final_results, TELEGRAM_CHAT_IDS)
-    print("Market Advisory Dispatched to all chats.")
+    # Scan Crypto (24/7)
+    for t in CRYPTO_TICKERS:
+        for m in ["Intraday", "Swing"]:
+            res = analyze_professional(t, m)
+            if res:
+                send_vip_signal(res)
+                time.sleep(1)
+
+    print("Scan Complete.")
