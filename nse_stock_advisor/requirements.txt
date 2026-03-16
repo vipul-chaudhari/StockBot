@@ -1,6 +1,7 @@
 yfinance
 pandas
 pandas_ta
-twilio
 requests
 pytz
+matplotlib
+mplfinance
