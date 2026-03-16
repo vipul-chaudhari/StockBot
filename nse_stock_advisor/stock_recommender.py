@@ -14,7 +14,8 @@ import io
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or '8757431245:AAHjis0btm24n0Q_WIh4GZYY-b-ToYyZKyU'
 
 # Load Chat IDs from env (comma separated) or use defaults
-env_ids = os.getenv('TELEGRAM_CHAT_IDS')
+# FIXED: Checking both singular and plural env variable names for compatibility
+env_ids = os.getenv('TELEGRAM_CHAT_IDS') or os.getenv('TELEGRAM_CHAT_ID')
 if env_ids:
     TELEGRAM_CHAT_IDS = [id.strip() for id in env_ids.split(',')]
 else:
@@ -87,7 +88,8 @@ def analyze_professional(ticker, mode="Intraday"):
             st = ta.supertrend(data['High'], data['Low'], data['Close'], length=10, multiplier=3.0)
             vwap = float(data['VWAP'].iloc[-1])
             st_dir = int(st['SUPERTd_10_3.0'].iloc[-1])
-            if cp > vwap and st_dir == 1 and vol_ratio > 1.2 and 45 < rsi < 75:
+            # RELAXED: vol_ratio > 1.0 (was 1.2)
+            if cp > vwap and st_dir == 1 and vol_ratio > 1.0 and 40 < rsi < 80:
                 sl = cp - (atr * 1.5)
                 tp = cp + ((cp - sl) * 2)
                 res = {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp, "mode": mode, "rsi": rsi}
@@ -96,7 +98,7 @@ def analyze_professional(ticker, mode="Intraday"):
             data['EMA20'] = ta.ema(data['Close'], length=20)
             data['EMA50'] = ta.ema(data['Close'], length=50)
             e20, e50 = float(data['EMA20'].iloc[-1]), float(data['EMA50'].iloc[-1])
-            if e20 > e50 and cp > e20 and rsi > 50 and vol_ratio > 1.0:
+            if e20 > e50 and cp > e20 and rsi > 45:
                 sl = cp - (atr * 2.0)
                 tp = cp + ((cp - sl) * 3)
                 res = {"ticker": ticker, "entry": cp, "sl": sl, "tp": tp, "mode": mode, "rsi": rsi}
@@ -148,8 +150,14 @@ if __name__ == "__main__":
     now_ist = datetime.datetime.now(ist)
     is_market_open = (now_ist.weekday() < 5 and 9 <= now_ist.hour < 16) # NSE hours
     
+    # STATUS UPDATE: Send "Scan Started" message to Telegram so user knows bot is alive
+    status_msg = f"🔍 *MARKET SCAN IN PROGRESS*\n⏰ IST: {now_ist.strftime('%H:%M:%S')}\n💹 Monitoring: {len(STOCK_TICKERS)} Stocks & {len(CRYPTO_TICKERS)} Crypto"
+    for chat_id in TELEGRAM_CHAT_IDS:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": status_msg, "parse_mode": "Markdown"})
+
     print(f"Starting Professional Scan at {now_ist.strftime('%H:%M')} IST...")
 
+    found_count = 0
     # Scan Stocks (only during NSE hours)
     if is_market_open:
         for t in STOCK_TICKERS:
@@ -157,6 +165,7 @@ if __name__ == "__main__":
                 res = analyze_professional(t, m)
                 if res:
                     send_vip_signal(res)
+                    found_count += 1
                     time.sleep(1)
 
     # Scan Crypto (24/7)
@@ -165,6 +174,7 @@ if __name__ == "__main__":
             res = analyze_professional(t, m)
             if res:
                 send_vip_signal(res)
+                found_count += 1
                 time.sleep(1)
 
-    print("Scan Complete.")
+    print(f"Scan Complete. Found {found_count} signals.")
