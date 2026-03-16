@@ -12,8 +12,15 @@ import io
 
 # --- CONFIGURATION (GITHUB SECRETS RECOMMENDED) ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or '8757431245:AAHjis0btm24n0Q_WIh4GZYY-b-ToYyZKyU'
-# List of Chat IDs (Your Private ID + Group ID)
-TELEGRAM_CHAT_IDS = ['8552505296', '-1003818653543']
+
+# Load Chat IDs from env (comma separated) or use defaults
+env_ids = os.getenv('TELEGRAM_CHAT_IDS')
+if env_ids:
+    TELEGRAM_CHAT_IDS = [id.strip() for id in env_ids.split(',')]
+else:
+    # Defaults: Your Private ID + GrowHigh Group ID
+    TELEGRAM_CHAT_IDS = ['8552505296', '-1003818653543']
+# ----------------------------------------------------
 
 STOCK_TICKERS = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
